@@ -18,6 +18,16 @@ from xplanlens.llm import PROVIDERS, LLMError, LLMRequest, build_compare_message
 from xplanlens.render import render_summary, render_table, render_tree_svg  # noqa: E402
 from xplanlens.report import build_html_report, read_plan_file  # noqa: E402
 
+try:  # HF Space 전용 패키지. ZeroGPU 하드웨어는 시작 시 @spaces.GPU 함수가 하나 이상 있어야 한다.
+    import spaces
+
+    @spaces.GPU
+    def _zerogpu_placeholder() -> None:
+        """이 앱은 GPU 를 쓰지 않는다. ZeroGPU 에서도 기동되도록 두는 빈 함수 (CPU Space 에서는 no-op)."""
+        return None
+except ImportError:
+    pass
+
 SAMPLES_DIR = ROOT / "src" / "xplanlens" / "samples"
 SAMPLE_LABELS = {
     "01_explain_plan_basic.txt": "① EXPLAIN PLAN 기본 (실제 11g 출력)",
