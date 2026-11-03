@@ -1,0 +1,41 @@
+SQL_ID  8fk2zq1m3x7cd, child number 0
+-------------------------------------
+SELECT /*+ gather_plan_statistics */ o.order_id, o.order_dt, c.cust_name,
+SUM(i.amount) FROM orders o, customers c, order_items i WHERE
+o.cust_id = c.cust_id AND i.order_id = o.order_id AND o.status = :B1
+AND o.order_dt >= :B2 GROUP BY o.order_id, o.order_dt, c.cust_name
+
+Plan hash value: 2817364519
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                       | Name           | Starts | E-Rows | A-Rows |   A-Time   | Buffers | Reads  |  OMem |  1Mem | Used-Mem |
+-----------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                |                |      1 |        |  48210 |00:00:41.37 |    1502K|  98412 |       |       |          |
+|   1 |  HASH GROUP BY                  |                |      1 |      1 |  48210 |00:00:41.37 |    1502K|  98412 |  9216K|  2290K| 9876K (0)|
+|   2 |   NESTED LOOPS                  |                |      1 |      1 |    193K|00:00:40.95 |    1502K|  98412 |       |       |          |
+|   3 |    NESTED LOOPS                 |                |      1 |      1 |  48210 |00:00:12.80 |     436K|  31877 |       |       |          |
+|*  4 |     TABLE ACCESS BY INDEX ROWID | ORDERS         |      1 |      1 |  48210 |00:00:09.11 |     291K|  30254 |       |       |          |
+|*  5 |      INDEX RANGE SCAN           | IX_ORDERS_DT   |      1 |     12 |   1210K|00:00:01.42 |    3388 |   3301 |       |       |          |
+|   6 |     TABLE ACCESS BY INDEX ROWID | CUSTOMERS      |  48210 |      1 |  48210 |00:00:03.51 |     144K|   1623 |       |       |          |
+|*  7 |      INDEX UNIQUE SCAN          | PK_CUSTOMERS   |  48210 |      1 |  48210 |00:00:01.20 |   96422 |     11 |       |       |          |
+|   8 |    TABLE ACCESS BY INDEX ROWID  | ORDER_ITEMS    |  48210 |      1 |    193K|00:00:27.95 |    1066K|  66535 |       |       |          |
+|*  9 |     INDEX RANGE SCAN            | IX_ITEMS_ORDER |  48210 |      1 |    193K|00:00:02.14 |     148K|   4021 |       |       |          |
+-----------------------------------------------------------------------------------------------------------------------------------------
+
+Peeked Binds (identified by position):
+--------------------------------------
+
+   1 - :B1 (VARCHAR2(30), CSID=846): 'SHIPPED'
+   2 - :B2 (DATE): 01/01/2010 00:00:00
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   4 - filter("O"."STATUS"=:B1)
+   5 - access("O"."ORDER_DT">=:B2)
+   7 - access("O"."CUST_ID"="C"."CUST_ID")
+   9 - access("I"."ORDER_ID"="O"."ORDER_ID")
+
+Note
+-----
+   - cardinality feedback used for this statement

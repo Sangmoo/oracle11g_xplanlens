@@ -1,0 +1,4 @@
+# Hugging Face Space 런타임 의존성 (gradio 는 README 의 sdk_version 으로 설치됨)
+anthropic>=1.0
+openai>=1.0
+markdown-it-py>=3.0

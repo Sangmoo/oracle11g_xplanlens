@@ -1,0 +1,28 @@
+SQL_ID  4h7tq0v2b9kxs, child number 1
+-------------------------------------
+SELECT /*+ gather_plan_statistics */ s.prod_id, SUM(s.amount_sold) FROM
+sales s, customers c WHERE s.cust_id = c.cust_id AND c.cust_city =
+'Seoul' GROUP BY s.prod_id
+
+Plan hash value: 3519235612
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation             | Name      | Starts | E-Rows | Pstart| Pstop | A-Rows |   A-Time   | Buffers | Reads  | Writes |  OMem |  1Mem | Used-Mem | Used-Tmp|
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT      |           |      1 |        |       |       |     72 |00:00:18.62 |     214K|    251K|  37840 |       |       |          |         |
+|   1 |  HASH GROUP BY        |           |      1 |     72 |       |       |     72 |00:00:18.62 |     214K|    251K|  37840 |  1394K|  1394K| 1366K (0)|         |
+|*  2 |   HASH JOIN           |           |      1 |  91845 |       |       |   2470K|00:00:17.10 |     214K|    251K|  37840 |    96M|  7381K|   26M (1)|     306M|
+|*  3 |    TABLE ACCESS FULL  | CUSTOMERS |      1 |   3542 |       |       |   1802K|00:00:02.31 |   38120 |  38004 |      0 |       |       |          |         |
+|   4 |    PARTITION RANGE ALL|           |      1 |    918K|     1 |    28 |   9188K|00:00:06.44 |     176K|    175K|      0 |       |       |          |         |
+|   5 |     TABLE ACCESS FULL | SALES     |     28 |    918K|     1 |    28 |   9188K|00:00:04.88 |     176K|    175K|      0 |       |       |          |         |
+------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   2 - access("S"."CUST_ID"="C"."CUST_ID")
+   3 - filter("C"."CUST_CITY"='Seoul')
+
+Note
+-----
+   - dynamic sampling used for this statement (level=2)

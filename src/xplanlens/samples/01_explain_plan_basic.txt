@@ -1,0 +1,18 @@
+Plan hash value: 2537846791
+
+-----------------------------------------------------------------------------
+| Id  | Operation          | Name              | Rows  | Bytes | Cost (%CPU)|
+-----------------------------------------------------------------------------
+|   0 | SELECT STATEMENT   |                   |    10 |  1850 |     2   (0)|
+|*  1 |  COUNT STOPKEY     |                   |       |       |            |
+|   2 |   TABLE ACCESS FULL| T_CLOSE_SALE_BASE |    10 |  1850 |     2   (0)|
+-----------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   1 - filter(ROWNUM<=10)
+
+Note
+-----
+   - 'PLAN_TABLE' is old version

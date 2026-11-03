@@ -1,0 +1,21 @@
+Plan hash value: 1123581321
+
+----------------------------------------------------------------------------------------
+| Id  | Operation              | Name      | Rows  | Bytes | Cost (%CPU)| Time     |
+----------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT       |           |   125K|    11M|  2186K  (1)| 07:17:21 |
+|*  1 |  FILTER                |           |       |       |            |          |
+|   2 |   MERGE JOIN CARTESIAN |           |   125K|    11M|  1260   (2)| 00:00:16 |
+|*  3 |    TABLE ACCESS FULL   | EMP_HIST  |    50 |  3150 |    12   (0)| 00:00:01 |
+|   4 |    BUFFER SORT         |           |  2500 | 75000 |  1248   (2)| 00:00:15 |
+|   5 |     TABLE ACCESS FULL  | DEPT_CODE |  2500 | 75000 |    25   (0)| 00:00:01 |
+|*  6 |   TABLE ACCESS FULL    | EMP_BONUS |     1 |    26 |    17   (0)| 00:00:01 |
+----------------------------------------------------------------------------------------
+
+Predicate Information (identified by operation id):
+---------------------------------------------------
+
+   1 - filter( EXISTS (SELECT 0 FROM "EMP_BONUS" "B" WHERE
+              "B"."EMP_NO"=:B1 AND TO_NUMBER("B"."BONUS_YM")>=201001))
+   3 - filter(TO_NUMBER("H"."EMP_ID")=12345)
+   6 - filter("B"."EMP_NO"=:B1 AND TO_NUMBER("B"."BONUS_YM")>=201001)
