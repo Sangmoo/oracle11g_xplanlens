@@ -28,6 +28,7 @@ tags:
 1. 실행계획을 **트리 다이어그램**과 **단계별 히트맵 표**로 시각화하고,
 2. 추정/실제 건수 괴리, NL 조인 반복 실행, TEMP 사용, 형변환 같은 병목을 **규칙 기반으로 진단**하며,
 3. 사용자가 **본인의 LLM API Key 를 입력한 경우에만** LLM 을 호출해 11g 에서 적용 가능한 개선안을 제안합니다.
+4. **SQL_ID 만 알면** 수집 스크립트를 만들어 주고, 그 실행 결과로 자식 커서·테이블/인덱스/컬럼 통계·바인드 값까지 함께 진단합니다. (DB 접속 정보 입력 없음)
 
 국내 SI·레거시 현장에 여전히 많은 11g 환경에서, DB 접속 없이 실행계획 텍스트만으로 튜닝 포인트를 빠르게 찾는 것이 목표입니다.
 
@@ -38,6 +39,7 @@ tags:
 - [주요 기능](#-주요-기능)
 - [지원 범위](#-지원-범위)
 - [사용 방법](#-사용-방법)
+- [SQL_ID 로 분석 (DB 접속 없이)](#-sql_id-로-분석-db-접속-없이)
 - [진단 규칙](#-진단-규칙)
 - [AI 개선안과 API Key 정책](#-ai-개선안과-api-key-정책)
 - [로컬 실행](#-로컬-실행)
@@ -58,6 +60,7 @@ tags:
 | **단계별 히트맵 표** | Starts, **E-Rows×Starts**, A-Rows, 괴리 배수(↑과소/↓과대 추정), 자체 시간·자체 Buffers 막대, Reads, Used-Mem/Used-Tmp, 조건절을 한 줄에 보여줍니다. 실행 통계가 없으면 Rows/Bytes/Cost/Cost 비중을 보여줍니다. |
 | **규칙 기반 진단** | 16가지 규칙과 Note 해석으로 🔴심각 / 🟠경고 / 🔵참고 등급의 진단과 개선 방향을 제시합니다. ([목록](#-진단-규칙)) |
 | **AI 개선안** (선택) | Anthropic Claude, OpenAI, OpenAI 호환 API(OpenRouter, 사내 게이트웨이, vLLM 등) 중 하나를 골라 본인 API Key 로 호출합니다. 규칙 진단 결과와 단계별 지표(JSON)를 함께 넘겨 LLM 이 숫자를 잘못 읽는 것을 줄였습니다. |
+| **SQL_ID 로 분석** | SQL_ID 를 넣으면 읽기 전용 SELECT 한 문장짜리 수집 스크립트를 만들어 줍니다. SQL\*Plus·SQL Developer·Toad 에서 실행한 결과를 붙여넣으면 실행계획 + `V$SQL` 자식 커서 통계 + 테이블/인덱스/컬럼 통계 + 바인드 캡처를 함께 분석하고, 통계 기반 규칙 15가지를 추가로 적용합니다. ([자세히](#-sql_id-로-분석-db-접속-없이)) |
 | **튜닝 전/후 비교** | 두 실행계획의 수행시간·Buffers·Reads·Cost 변화율, 오브젝트별 접근 경로 변화, 조인 방식 변화, 해결된 진단/새로 생긴 진단을 비교합니다. AI 비교 해설도 받을 수 있습니다. |
 | **파일 업로드** | `.txt .sql .log .lst .html` 파일을 올리면 텍스트로 변환합니다. UTF-8 → CP949(국내 Windows 기본) → Latin-1 순으로 디코딩하고, HTML 로 저장된 출력은 태그를 제거합니다. |
 | **HTML 보고서** | 요약·진단, 트리, 표, AI 개선안, 원문을 외부 리소스 없는 단일 HTML 파일로 내려받습니다. 메일 첨부나 산출물 보관용입니다. |
@@ -127,6 +130,76 @@ SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY_AWR('&sql_id'));
 | ② NL 조인 + 카디널리티 오류 | E-Rows 1 vs A-Rows 48K, 인덱스로 121만 건 읽고 4.8만 건만 남기는 패턴, NL 내부 4.8만 회 반복, Peeked Binds, Cardinality Feedback |
 | ③ 해시 조인 TEMP 사용 | Build 쪽 509배 과소 추정 → one-pass TEMP 306M, PARTITION RANGE ALL, dynamic sampling |
 | ④ FILTER 서브쿼리 + 카티션 | Unnesting 실패, MERGE JOIN CARTESIAN, `TO_NUMBER(컬럼)` 형변환 |
+| ⑤ SQL_ID 수집 결과 | 자식 커서 2개(plan hash 2개), STALE 통계, 히스토그램 없는 조건 컬럼, UNUSABLE 인덱스, DEGREE=DEFAULT 테이블, 바인드 캡처 |
+
+---
+
+## 🆔 SQL_ID 로 분석 (DB 접속 없이)
+
+Hugging Face 에서 돌아가는 웹 앱은 사내망·내 PC 에서만 접속되는 DB 에 연결할 수 없습니다. 또 DB 계정과 비밀번호를
+외부 웹사이트에 입력하는 것은 보안상 바람직하지 않습니다. 그래서 XPlanLens 는 **DB 에 접속하지 않고**, 사용자가 이미 쓰고 있는
+SQL 도구를 수집 수단으로 활용합니다.
+
+```
+[XPlanLens]  ① SQL_ID 입력 → 수집 스크립트 생성 (읽기 전용 SELECT 한 문장)
+     │
+     ▼ 복사
+[내 PC 의 SQL*Plus / SQL Developer / Toad]  ② DB 에 접속해 실행 → 출력 복사
+     │
+     ▼ 붙여넣기 (또는 스풀 파일 업로드)
+[XPlanLens]  ③ 실행계획 + 커서 통계 + 오브젝트 통계 + 바인드를 함께 진단
+```
+
+### 사용 순서
+
+1. **🆔 SQL_ID 로 분석** 탭에서 SQL_ID 를 입력합니다. child 번호를 비우면 모든 자식 커서를 수집하고, 분석에는 가장 최근에 실행된 child 를 씁니다.
+   바인드 값이 민감하면 **바인드 캡처 값 포함**을 해제하세요.
+2. **① 수집 스크립트 만들기** → 코드 상자 오른쪽 위 복사 버튼으로 복사합니다.
+3. 평소 쓰는 도구에서 실행합니다.
+   - **SQL\*Plus**: 그대로 붙여넣어 실행하거나 `SPOOL out.txt` 로 저장해 파일을 업로드합니다.
+   - **SQL Developer**: 워크시트에 붙여넣고 **F5(스크립트 실행)** → 스크립트 출력 전체 복사. 또는 SELECT 만 **Ctrl+Enter** 로 실행한 뒤 결과 그리드에서 Ctrl+A → Ctrl+C.
+   - **Toad**: Execute as Script(F5) 결과 복사, 또는 그리드 전체 행 복사.
+4. 결과를 **② 실행 결과 붙여넣기**에 넣고 **③ 분석하기**를 누르면 분석 탭으로 이동해 결과를 보여줍니다. 새 **DB 통계** 탭에 수집된 통계가 표로 정리됩니다.
+5. AI 개선안을 요청하면 DB 통계도 함께 LLM 에 전달되고, HTML 보고서에도 DB 통계 절이 들어갑니다.
+
+출력의 각 행은 `@@PLAN|…`, `@@TAB|…` 처럼 태그로 시작하므로 도구 머리글, 줄 번호, 그리드 복사 시 붙는 따옴표, `n rows selected.` 같은
+잡음이 섞여도 해석됩니다. 이 형식의 텍스트는 **📊 실행계획 분석** 탭에 바로 붙여넣어도 자동 인식합니다.
+
+### 수집 항목과 필요 권한
+
+| 태그 | 출처 | 내용 |
+|---|---|---|
+| `@@PLAN` | `DBMS_XPLAN.DISPLAY_CURSOR(sql_id, child, 'ALLSTATS LAST +PEEKED_BINDS')` | 자식 커서별 실행계획 |
+| `@@CUR` | `V$SQL` | child, plan hash, 실행 수, 경과/CPU/IO 대기, Buffer Gets, Disk Reads, Rows, 마지막 실행 시각, bind-sensitive/aware, SQL Profile, SPM Baseline |
+| `@@SQL` | `V$SQL.SQL_FULLTEXT` | SQL 전문 (500자 단위로 나눠 담고 줄바꿈 보존) |
+| `@@TAB` | `ALL_TABLES`, `ALL_TAB_STATISTICS` | NUM_ROWS, BLOCKS, LAST_ANALYZED, STALE_STATS, 통계 잠금, 파티션 여부, DEGREE |
+| `@@IDX` | `ALL_INDEXES`, `ALL_IND_COLUMNS` | 실행계획에 나온 테이블의 **모든** 인덱스: 컬럼 구성, 상태, VISIBILITY, BLEVEL, CLUSTERING_FACTOR |
+| `@@COL` | `ALL_TAB_COLUMNS` | 조건절(`V$SQL_PLAN` 의 access/filter predicates)에 쓰인 컬럼의 NDV, NULL 수, DENSITY, 히스토그램 |
+| `@@BIND` | `V$SQL_BIND_CAPTURE` | 캡처된 바인드 값 (선택) |
+
+- V$ 뷰 조회 권한이 필요합니다. 보통 `SELECT_CATALOG_ROLE` 또는 `SELECT ANY DICTIONARY` 가 있으면 됩니다.
+- 실제 실행 통계(A-Rows, A-Time)는 SQL 이 `/*+ GATHER_PLAN_STATISTICS */` 힌트나 `STATISTICS_LEVEL=ALL` 로 실행된 경우에만 나옵니다.
+  없으면 추정치 + `V$SQL` 누적 통계로 분석합니다.
+- 커서가 공유 풀에서 밀려나면 실행계획을 찾을 수 없습니다(`cannot be found`). SQL 을 다시 실행한 직후 수집하세요.
+  AWR(`DBA_HIST_*`)은 Diagnostics Pack 라이선스가 필요해 기본 스크립트에 넣지 않았습니다.
+
+### 통계 기반 추가 규칙
+
+| 규칙 ID | 등급 | 탐지 조건 | 개선 방향 |
+|---|---|---|---|
+| `MULTIPLE_PLANS` | 경고 | 같은 SQL_ID 에 plan hash 가 2개 이상 | plan hash 별 1회 평균 성능 비교, `DBMS_SPM.LOAD_PLANS_FROM_CURSOR_CACHE` 로 좋은 계획 고정 |
+| `BIND_AWARE` | 참고 | `IS_BIND_AWARE=Y` (적응형 커서 공유) | 바인드 값 범위별 실행계획 확인 |
+| `CURSOR_INVALIDATIONS` | 참고 | INVALIDATIONS ≥ 10 | 통계 재수집·DDL 시점 확인 |
+| `NO_TABLE_STATS` | 심각 | LAST_ANALYZED 없음 (임시 테이블 제외) | `DBMS_STATS.GATHER_TABLE_STATS` |
+| `STALE_STATS` | 경고 | `STALE_STATS=YES` | 통계 재수집 (잠금 여부 함께 안내) |
+| `OLD_STATS` | 참고 | 마지막 수집이 180일 이상 지남 | 최근 값 범위 조회 SQL 은 재수집 |
+| `NUM_ROWS_MISMATCH` | 경고 | 조건 없는 FULL SCAN 의 실제 건수와 NUM_ROWS 가 10배 이상 차이 | 통계 재수집 |
+| `TABLE_DEGREE` | 경고 | 테이블 DEGREE 가 1 이 아님(DEFAULT 포함) | `NOPARALLEL`, 필요한 SQL 에만 PARALLEL 힌트 |
+| `UNUSABLE_INDEX` / `INVISIBLE_INDEX` | 심각 / 참고 | 인덱스 상태 UNUSABLE / INVISIBLE | `ALTER INDEX … REBUILD ONLINE` |
+| `HISTOGRAM_CANDIDATE` | 경고 | 카디널리티 괴리가 시작된 단계의 조건 컬럼에 히스토그램 없음 | `METHOD_OPT => 'FOR COLUMNS SIZE 254 컬럼'` (바인드 피킹 영향 함께 검토) |
+| `INDEX_CANDIDATE` | 경고(≤1%) / 참고(≤5%) | NUM_ROWS 10만 건 이상 테이블의 FULL SCAN 이 5% 이하만 남기는데, 필터 컬럼으로 시작하는 인덱스가 없음 | 결합 인덱스 후보 컬럼 제시 |
+| `POOR_CLUSTERING` | 참고 | 1,000건 이상 읽는 INDEX RANGE SCAN → TABLE ACCESS BY ROWID 에서 CLUSTERING_FACTOR ≥ NUM_ROWS×0.5 | 커버링 인덱스, FULL SCAN + 해시 조인 비교 |
+| `DB_VERSION` / `CURSOR_NOT_FOUND` | 참고 / 심각 | 11g 가 아닌 DB / 공유 풀에 커서 없음 | 안내 |
 
 ---
 
@@ -197,7 +270,7 @@ pip install pytest
 pytest -q
 ```
 
-59개 테스트가 다음을 검증합니다. 실제 LLM API 는 호출하지 않고 SDK 를 가짜 객체로 바꿔 테스트합니다.
+71개 테스트가 다음을 검증합니다. 실제 LLM API 는 호출하지 않고 SDK 를 가짜 객체로 바꿔 테스트합니다.
 
 | 파일 | 검증 내용 |
 |---|---|
@@ -205,7 +278,8 @@ pytest -q
 | `tests/test_rules.py` | E-Rows×Starts, 자체 시간·버퍼 계산, 파티션 반복자 예외, 근본 원인 단계만 보고하는지, 각 규칙의 탐지 여부와 대상 단계, 작은 쿼리에서 오탐이 없는지, JSON 직렬화 |
 | `tests/test_render_report_compare.py` | 모든 샘플의 SVG 가 올바른 XML 인지, 트리 레이아웃, HTML 이스케이프(XSS 방지), 보고서 구성, CP949/HTML 파일 읽기, 튜닝 전/후 비교 |
 | `tests/test_llm.py` | Key 없을 때 거부, Base URL 필수, 프롬프트에 지표·진단·11g 제약 포함, Anthropic/OpenAI 호출 인자, 거절 응답 처리, 오류 메시지의 Key 마스킹 |
-| `tests/test_app.py` | Gradio 핸들러: 샘플 로딩, 분석 출력, Key 없을 때 LLM 미호출, 보고서 파일 생성, 비교, 공급자 변경 |
+| `tests/test_collect.py` | SQL_ID 검증(주입 방지), 수집 스크립트가 읽기 전용 단일 SELECT 이고 SQL\*Plus 에서 끊기지 않는지, 태그 출력 해석(그리드 따옴표·잡음 포함), 자식 커서 선택, 커서 없음, 통계 규칙 탐지, DB 통계 표 |
+| `tests/test_app.py` | Gradio 핸들러: 샘플 로딩, 분석 출력, Key 없을 때 LLM 미호출, 보고서 파일 생성, 비교, 공급자 변경, SQL_ID 흐름(스크립트 → 분석 → AI 입력 → 보고서) |
 
 GitHub 에 push 하면 [`.github/workflows/tests.yml`](.github/workflows/tests.yml) 이 Python 3.10 / 3.12 에서 테스트를 실행합니다.
 
@@ -296,6 +370,7 @@ oracle11g_xplanlens/
 │   ├── parser.py                  # DBMS_XPLAN 텍스트 파서
 │   ├── rules.py                   # 파생 지표(E-Rows×Starts, 자체 시간/버퍼) + 진단 규칙
 │   ├── render.py                  # 요약 Markdown, 히트맵 HTML 표, SVG 트리
+│   ├── collect.py                 # SQL_ID 수집 스크립트 생성, 수집 출력 해석, 통계 기반 규칙
 │   ├── compare.py                 # 튜닝 전/후 비교
 │   ├── llm.py                     # 프롬프트 구성, Anthropic/OpenAI 호출
 │   ├── report.py                  # 파일 읽기(CP949/HTML), HTML 보고서
@@ -343,7 +418,8 @@ print(a.plan.node(5).misestimate_ratio)
 - 텍스트 출력만 해석합니다. `V$SQL_PLAN_STATISTICS_ALL` 직접 조회, SQL Monitor 보고서, 10046 트레이스는 지원하지 않습니다.
 - 병렬 실행(PX) 계획은 표시는 되지만 TQ/IN-OUT 기반 분석은 하지 않습니다.
 - 11g 의 A-Time 은 일부 단계(예: 해시 조인 Build, COUNT STOPKEY)에서 정확히 누적되지 않을 수 있어 자체 시간은 근사치입니다.
-- 진단 규칙은 실행계획만 보고 판단하므로 테이블 크기·인덱스 구성을 알 수 없습니다. 추가 정보는 AI 분석 입력란에 적어 주세요.
+- 실행계획 텍스트만 넣으면 테이블 크기·인덱스 구성을 알 수 없습니다. **SQL_ID 로 분석** 기능을 쓰거나 추가 정보를 AI 분석 입력란에 적어 주세요.
+- XPlanLens 는 DB 에 직접 접속하지 않습니다. 수집 스크립트 실행은 사용자 도구에서 이뤄지며, 공유 풀에서 밀려난 커서와 AWR 이력은 다루지 않습니다.
 
 **로드맵**
 

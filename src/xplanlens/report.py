@@ -87,7 +87,7 @@ def _md_to_html(md: str) -> str:
         return f"<pre>{escape(md)}</pre>"
 
 
-def build_html_report(a: Analysis, raw_plan: str, ai_advice: str = "", compare_md: str = "") -> str:
+def build_html_report(a: Analysis, raw_plan: str, ai_advice: str = "", compare_md: str = "", db_stats_md: str = "") -> str:
     """분석 결과 전체를 하나의 독립 HTML 파일로 만든다 (외부 리소스 없음)."""
     title = f"XPlanLens 실행계획 분석 보고서{' - ' + a.plan.sql_id if a.plan.sql_id else ''}"
     sections = [
@@ -97,6 +97,8 @@ def build_html_report(a: Analysis, raw_plan: str, ai_advice: str = "", compare_m
         "<h2>실행계획 트리</h2>", render_tree_svg(a),
         "<h2>단계별 상세</h2>", render_table(a),
     ]
+    if db_stats_md.strip():
+        sections += ["<h2>DB 통계 (SQL_ID 수집)</h2>", _md_to_html(db_stats_md)]
     if compare_md.strip():
         sections += ["<h2>튜닝 전/후 비교</h2>", _md_to_html(compare_md)]
     if ai_advice.strip():

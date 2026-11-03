@@ -8,14 +8,14 @@ import app  # noqa: E402
 
 
 def test_samples_registered():
-    assert len(app.SAMPLES) == 4
+    assert len(app.SAMPLES) == 5
     for label in app.SAMPLES:
         assert "Plan hash value" in app.load_sample(label)
 
 
 def test_run_analysis_outputs():
     text = app.load_sample(next(iter(app.SAMPLES)))
-    summary, tree, table, js, ai = app.run_analysis(text)
+    summary, tree, table, js, ai, stats = app.run_analysis(text)
     assert "실행계획 요약" in summary
     assert "<svg" in tree and "<table" in table
     assert js["plan"]["nodes"]
@@ -71,3 +71,28 @@ def test_provider_change():
     assert url_upd["visible"] is True
     model_upd, url_upd = app.on_provider_change("OpenAI")
     assert model_upd["value"] == "gpt-5-mini" and url_upd["visible"] is False
+
+
+def test_sqlid_flow(monkeypatch):
+    script = app.make_script("8FK2ZQ1M3X7CD", "", True)
+    assert "DISPLAY_CURSOR('8fk2zq1m3x7cd', NULL" in script
+    with pytest.raises(gr.Error):
+        app.make_script("bad", "", True)
+    with pytest.raises(gr.Error):
+        app.make_script("8fk2zq1m3x7cd", "x", True)
+    with pytest.raises(gr.Error):
+        app.send_collected("그냥 텍스트")
+
+    text = app.load_sample("⑤ SQL_ID 수집 결과 (실행계획 + 통계 + 바인드)")
+    plan, _ = app.send_collected(text)
+    summary, tree, table, js, ai, stats = app.run_analysis(plan)
+    assert "STALE_STATS" in str(js["findings"]) and js["collected"]["selected_child"] == 0
+    assert "테이블 통계" in stats
+
+    seen = {}
+    monkeypatch.setattr(app, "call_llm", lambda req, system, user: seen.setdefault("user", user) and "ok")
+    app.run_ai(text, "", "", "OpenAI", "sk-x", "gpt-5-mini", "", "한국어", progress=lambda *a, **k: None)
+    assert "@@" not in seen["user"] and "테이블 통계" in seen["user"]
+
+    html = open(app.export_report(text, ""), encoding="utf-8").read()
+    assert "DB 통계 (SQL_ID 수집)" in html

@@ -1,0 +1,92 @@
+@@META|8fk2zq1m3x7cd|2026-11-03 10:15:00|11.2.0.4.0|NULL|xplanlens-collect-1
+@@PLAN|SQL_ID  8fk2zq1m3x7cd, child number 0
+@@PLAN|-------------------------------------
+@@PLAN|SELECT /*+ gather_plan_statistics */ o.order_id, o.order_dt, c.cust_name,
+@@PLAN|SUM(i.amount) FROM orders o, customers c, order_items i WHERE
+@@PLAN|o.cust_id = c.cust_id AND i.order_id = o.order_id AND o.status = :B1
+@@PLAN|AND o.order_dt >= :B2 GROUP BY o.order_id, o.order_dt, c.cust_name
+@@PLAN|
+@@PLAN|Plan hash value: 2817364519
+@@PLAN|
+@@PLAN|-----------------------------------------------------------------------------------------------------------------------------------------
+@@PLAN|| Id  | Operation                       | Name           | Starts | E-Rows | A-Rows |   A-Time   | Buffers | Reads  |  OMem |  1Mem | Used-Mem |
+@@PLAN|-----------------------------------------------------------------------------------------------------------------------------------------
+@@PLAN||   0 | SELECT STATEMENT                |                |      1 |        |  48210 |00:00:41.37 |    1502K|  98412 |       |       |          |
+@@PLAN||   1 |  HASH GROUP BY                  |                |      1 |      1 |  48210 |00:00:41.37 |    1502K|  98412 |  9216K|  2290K| 9876K (0)|
+@@PLAN||   2 |   NESTED LOOPS                  |                |      1 |      1 |    193K|00:00:40.95 |    1502K|  98412 |       |       |          |
+@@PLAN||   3 |    NESTED LOOPS                 |                |      1 |      1 |  48210 |00:00:12.80 |     436K|  31877 |       |       |          |
+@@PLAN||*  4 |     TABLE ACCESS BY INDEX ROWID | ORDERS         |      1 |      1 |  48210 |00:00:09.11 |     291K|  30254 |       |       |          |
+@@PLAN||*  5 |      INDEX RANGE SCAN           | IX_ORDERS_DT   |      1 |     12 |   1210K|00:00:01.42 |    3388 |   3301 |       |       |          |
+@@PLAN||   6 |     TABLE ACCESS BY INDEX ROWID | CUSTOMERS      |  48210 |      1 |  48210 |00:00:03.51 |     144K|   1623 |       |       |          |
+@@PLAN||*  7 |      INDEX UNIQUE SCAN          | PK_CUSTOMERS   |  48210 |      1 |  48210 |00:00:01.20 |   96422 |     11 |       |       |          |
+@@PLAN||   8 |    TABLE ACCESS BY INDEX ROWID  | ORDER_ITEMS    |  48210 |      1 |    193K|00:00:27.95 |    1066K|  66535 |       |       |          |
+@@PLAN||*  9 |     INDEX RANGE SCAN            | IX_ITEMS_ORDER |  48210 |      1 |    193K|00:00:02.14 |     148K|   4021 |       |       |          |
+@@PLAN|-----------------------------------------------------------------------------------------------------------------------------------------
+@@PLAN|
+@@PLAN|Peeked Binds (identified by position):
+@@PLAN|--------------------------------------
+@@PLAN|
+@@PLAN|   1 - :B1 (VARCHAR2(30), CSID=846): 'SHIPPED'
+@@PLAN|   2 - :B2 (DATE): 01/01/2010 00:00:00
+@@PLAN|
+@@PLAN|Predicate Information (identified by operation id):
+@@PLAN|---------------------------------------------------
+@@PLAN|
+@@PLAN|   4 - filter("O"."STATUS"=:B1)
+@@PLAN|   5 - access("O"."ORDER_DT">=:B2)
+@@PLAN|   7 - access("O"."CUST_ID"="C"."CUST_ID")
+@@PLAN|   9 - access("I"."ORDER_ID"="O"."ORDER_ID")
+@@PLAN|
+@@PLAN|Note
+@@PLAN|-----
+@@PLAN|   - cardinality feedback used for this statement
+@@PLAN|
+@@PLAN|
+@@PLAN|SQL_ID  8fk2zq1m3x7cd, child number 1
+@@PLAN|-------------------------------------
+@@PLAN|SELECT /*+ gather_plan_statistics */ o.order_id, o.order_dt, c.cust_name,
+@@PLAN|SUM(i.amount) FROM orders o, customers c, order_items i WHERE
+@@PLAN|o.cust_id = c.cust_id AND i.order_id = o.order_id AND o.status = :B1
+@@PLAN|AND o.order_dt >= :B2 GROUP BY o.order_id, o.order_dt, c.cust_name
+@@PLAN|
+@@PLAN|Plan hash value: 1934450212
+@@PLAN|
+@@PLAN|-------------------------------------------------------------------------------------------------------------------------------
+@@PLAN|| Id  | Operation              | Name        | Starts | E-Rows | A-Rows |   A-Time   | Buffers | Reads  |  OMem |  1Mem | Used-Mem |
+@@PLAN|-------------------------------------------------------------------------------------------------------------------------------
+@@PLAN||   0 | SELECT STATEMENT       |             |      1 |        |     12 |00:00:00.84 |   21310 |   2104 |       |       |          |
+@@PLAN||   1 |  HASH GROUP BY         |             |      1 |     11 |     12 |00:00:00.84 |   21310 |   2104 |  1088K|  1088K| 1276K (0)|
+@@PLAN||*  2 |   HASH JOIN            |             |      1 |     45 |     48 |00:00:00.83 |   21310 |   2104 |  1517K|  1517K| 1250K (0)|
+@@PLAN||*  3 |    HASH JOIN           |             |      1 |     11 |     12 |00:00:00.41 |   10233 |   1022 |  1517K|  1517K| 1145K (0)|
+@@PLAN||*  4 |     TABLE ACCESS FULL  | ORDERS      |      1 |     11 |     12 |00:00:00.30 |    9120 |    988 |       |       |          |
+@@PLAN||   5 |     TABLE ACCESS FULL  | CUSTOMERS   |      1 |  50000 |  50000 |00:00:00.05 |    1113 |     34 |       |       |          |
+@@PLAN||   6 |    TABLE ACCESS FULL   | ORDER_ITEMS |      1 |   4800K|   4800K|00:00:00.40 |   11077 |   1048 |       |       |          |
+@@PLAN|-------------------------------------------------------------------------------------------------------------------------------
+@@PLAN|
+@@PLAN|Predicate Information (identified by operation id):
+@@PLAN|---------------------------------------------------
+@@PLAN|
+@@PLAN|   2 - access("I"."ORDER_ID"="O"."ORDER_ID")
+@@PLAN|   3 - access("O"."CUST_ID"="C"."CUST_ID")
+@@PLAN|   4 - filter(("O"."STATUS"=:B1 AND "O"."ORDER_DT">=:B2))
+@@CUR|0|2817364519|120|4965600000|3810200000|180240000|11809440|5785200|11640|120|1|0|1012000000|2026-11-03 10:12:41|2026-10-30/08:01:12|Y|N|Y|ALL_ROWS|9|||JDBC Thin Client
+@@CUR|1|1934450212|30|26100000|21400000|639300|63120|360|30|30|1|0|4500000|2026-11-02 23:40:05|2026-11-02/23:10:44|Y|Y|Y|ALL_ROWS|5120|||SQL*Plus
+@@SQL|SELECT /*+ gather_plan_statistics */ o.order_id, o.order_dt, c.cust_name,{{NL}}SUM(i.amount) FROM orders o, customers c, order_items i WHERE{{NL}}o.cust_id = c.cust_id AND i.order_id = o.order_id AND o.status = :B1{{NL}}AND o.order_dt >= :B2 GROUP BY o.order_id, o.order_dt, c.cust_name
+@@TAB|SALES|CUSTOMERS|50000|1180|160|2026-10-01 22:00:12|NO||NO|1|N
+@@TAB|SALES|ORDERS|2010000|30500|98|2025-03-02 22:00:41|YES||NO|1|N
+@@TAB|SALES|ORDER_ITEMS|4800000|65800|90|2026-09-14 22:03:10|NO||NO|DEFAULT|N
+@@IDX|SALES|IX_ORDERS_DT|SALES|ORDERS|NONUNIQUE|NORMAL|VALID|VISIBLE|2|5410|1450|1830000|2010000|2025-03-02 22:00:44|NO|1|ORDER_DT
+@@IDX|SALES|PK_ORDERS|SALES|ORDERS|UNIQUE|NORMAL|VALID|VISIBLE|2|4200|2010000|31000|2010000|2025-03-02 22:00:45|NO|1|ORDER_ID
+@@IDX|SALES|PK_CUSTOMERS|SALES|CUSTOMERS|UNIQUE|NORMAL|VALID|VISIBLE|1|105|50000|1190|50000|2026-10-01 22:00:13|NO|1|CUST_ID
+@@IDX|SALES|IX_ITEMS_ORDER|SALES|ORDER_ITEMS|NONUNIQUE|NORMAL|VALID|VISIBLE|2|11200|2010000|4650000|4800000|2026-09-14 22:03:30|NO|1|ORDER_ID
+@@IDX|SALES|IX_ITEMS_PRDT|SALES|ORDER_ITEMS|NONUNIQUE|NORMAL|UNUSABLE|VISIBLE|2|9800|12000|3100000|4800000|2026-09-14 22:03:41|NO|1|PRDT_ID,ORDER_ID
+@@COL|SALES|ORDERS|ORDER_ID|NUMBER|N|2010000|0|.000000497512437810945|NONE|1|2025-03-02 22:00:41
+@@COL|SALES|ORDERS|CUST_ID|NUMBER|N|50000|0|.00002|NONE|1|2025-03-02 22:00:41
+@@COL|SALES|ORDERS|STATUS|VARCHAR2|N|5|0|.2|NONE|1|2025-03-02 22:00:41
+@@COL|SALES|ORDERS|ORDER_DT|DATE|N|1450|0|.000689655172413793|NONE|1|2025-03-02 22:00:41
+@@COL|SALES|CUSTOMERS|CUST_ID|NUMBER|N|50000|0|.00002|NONE|1|2026-10-01 22:00:12
+@@COL|SALES|ORDER_ITEMS|ORDER_ID|NUMBER|N|2010000|0|.000000497512437810945|NONE|1|2026-09-14 22:03:10
+@@BIND|0|1|:B1|VARCHAR2(32)|2026-11-03 10:02:11|SHIPPED
+@@BIND|0|2|:B2|DATE|2026-11-03 10:02:11|01/01/2010 00:00:00
+@@BIND|1|1|:B1|VARCHAR2(32)|2026-11-02 23:25:31|CANCELLED
+@@BIND|1|2|:B2|DATE|2026-11-02 23:25:31|10/01/2026 00:00:00

@@ -3,7 +3,7 @@ from .models import PeekedBind, Plan, PlanNode, Predicate
 from .parser import parse_plan
 from .rules import Analysis, Finding, analyze, run_rules
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Analysis",

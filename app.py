@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import gradio as gr  # noqa: E402
 
 from xplanlens import __version__, analyze  # noqa: E402
+from xplanlens.collect import analyze_collected, build_collect_script, is_collected, render_collected  # noqa: E402
 from xplanlens.compare import compare_plans  # noqa: E402
 from xplanlens.llm import PROVIDERS, LLMError, LLMRequest, build_compare_messages, build_messages, call_llm  # noqa: E402
 from xplanlens.render import render_summary, render_table, render_tree_svg  # noqa: E402
@@ -34,6 +35,7 @@ SAMPLE_LABELS = {
     "02_nested_loops_misestimate.txt": "② NL 조인 + 카디널리티 오류 (ALLSTATS LAST)",
     "03_hash_join_temp_spill.txt": "③ 해시 조인 TEMP 사용 + 파티션 (ALLSTATS LAST)",
     "04_filter_subquery_cartesian.txt": "④ FILTER 서브쿼리 + 카티션 + 형변환 (EXPLAIN)",
+    "05_sqlid_collected.txt": "⑤ SQL_ID 수집 결과 (실행계획 + 통계 + 바인드)",
 }
 SAMPLES = {SAMPLE_LABELS.get(p.name, p.stem): p for p in sorted(SAMPLES_DIR.glob("*.txt"))}
 
@@ -48,6 +50,19 @@ SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR(NULL, NULL, 'ALLSTATS LAST +PEEKED
 SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY_CURSOR('&sql_id', NULL, 'ALLSTATS LAST +PEEKED_BINDS'));
 ```
 `EXPLAIN PLAN FOR ...` + `DBMS_XPLAN.DISPLAY` 출력도 분석하지만, 추정치만 있어 정확도가 떨어집니다.
+"""
+
+SQLID_HELP = """
+**DB 접속 정보를 입력하지 않고** SQL_ID 하나로 실행계획과 통계를 함께 분석합니다. XPlanLens 는 사용자 DB 에 접속하지 않습니다.
+
+1. SQL_ID 를 입력하고 **수집 스크립트**를 만듭니다. (읽기 전용 SELECT 한 문장)
+2. 평소 쓰는 **SQL*Plus · SQL Developer · Toad** 에서 실행하고, 출력 전체를 복사해 아래에 붙여넣습니다.
+3. **분석하기**를 누르면 실행계획 + 자식 커서 통계 + 테이블/인덱스/컬럼 통계 + 바인드 값을 함께 진단합니다.
+
+수집 항목: `DBMS_XPLAN.DISPLAY_CURSOR(ALLSTATS LAST)`, `V$SQL`(자식 커서·plan hash·누적 통계), `V$SQL_BIND_CAPTURE`,
+`ALL_TABLES`/`ALL_TAB_STATISTICS`(건수·STALE), `ALL_INDEXES`(구성·상태·클러스터링 팩터), `ALL_TAB_COLUMNS`(조건절 컬럼 NDV·히스토그램).
+필요 권한: `SELECT_CATALOG_ROLE` 또는 `SELECT ANY DICTIONARY` 수준의 V$ 조회 권한. 실제 실행 통계(A-Rows)는 SQL 이
+`GATHER_PLAN_STATISTICS` 힌트나 `STATISTICS_LEVEL=ALL` 로 실행된 경우에만 나옵니다. 바인드 값이 민감하면 체크를 해제하세요.
 """
 
 PRIVACY = (
@@ -76,11 +91,25 @@ def load_file(file) -> str:
         raise gr.Error(f"파일을 읽지 못했습니다: {e}")
 
 
+NO_DB_STATS = "SQL_ID 탭에서 만든 수집 스크립트의 출력을 분석하면 커서·테이블·인덱스·컬럼 통계가 여기에 표시됩니다."
+
+
+def prepare(text: str):
+    """일반 DBMS_XPLAN 출력과 SQL_ID 수집 출력을 모두 받아 (분석, 실행계획 원문, DB 통계 Markdown, 수집 결과) 를 돌려준다."""
+    if is_collected(text):
+        a, c = analyze_collected(text)
+        return a, c.plan_text or text, render_collected(c, {n.name for n in a.plan.nodes if n.name}), c
+    return analyze(text), text, "", None
+
+
 def run_analysis(plan_text: str):
     if not plan_text or not plan_text.strip():
         raise gr.Error("실행계획을 붙여넣거나 파일/샘플을 불러와 주세요.")
-    a = analyze(plan_text)
-    return render_summary(a), render_tree_svg(a), render_table(a), a.to_dict(), ""
+    a, _, stats_md, c = prepare(plan_text)
+    js = a.to_dict()
+    if c is not None:
+        js["collected"] = c.to_dict()
+    return render_summary(a), render_tree_svg(a), render_table(a), js, "", stats_md or NO_DB_STATS
 
 
 def _llm_request(provider, api_key, model, base_url, language) -> LLMRequest:
@@ -92,11 +121,12 @@ def run_ai(plan_text, sql_text, extra, provider, api_key, model, base_url, langu
         return "🔑 **AI 개선안은 API Key 를 입력한 사용자만 사용할 수 있습니다.** 상단 'AI 설정'에 본인의 API Key 를 입력해 주세요. (규칙 기반 분석은 Key 없이 사용 가능합니다.)"
     if not plan_text or not plan_text.strip():
         raise gr.Error("실행계획을 먼저 입력해 주세요.")
-    a = analyze(plan_text)
+    a, raw_plan, stats_md, _ = prepare(plan_text)
     if not a.plan.nodes:
         raise gr.Error("실행계획을 해석하지 못해 AI 분석을 진행할 수 없습니다.")
     progress(0.2, desc="LLM 에 개선안을 요청하는 중…")
-    system, user = build_messages(a, plan_text, sql_text or "", extra or "", language)
+    extra = "\n\n".join(x for x in ((extra or "").strip(), stats_md) if x)
+    system, user = build_messages(a, raw_plan, sql_text or "", extra, language)
     try:
         return call_llm(_llm_request(provider, api_key, model, base_url, language), system, user)
     except LLMError as e:
@@ -106,7 +136,7 @@ def run_ai(plan_text, sql_text, extra, provider, api_key, model, base_url, langu
 def run_compare(before_text: str, after_text: str):
     if not (before_text or "").strip() or not (after_text or "").strip():
         raise gr.Error("튜닝 전/후 실행계획을 모두 입력해 주세요.")
-    b, a = analyze(before_text), analyze(after_text)
+    b, a = prepare(before_text)[0], prepare(after_text)[0]
     return compare_plans(b, a), render_tree_svg(b), render_tree_svg(a), ""
 
 
@@ -115,8 +145,8 @@ def run_compare_ai(before_text, after_text, provider, api_key, model, base_url, 
         return "🔑 **AI 비교 해설은 API Key 를 입력한 사용자만 사용할 수 있습니다.**"
     if not (before_text or "").strip() or not (after_text or "").strip():
         raise gr.Error("튜닝 전/후 실행계획을 모두 입력해 주세요.")
-    b, a = analyze(before_text), analyze(after_text)
-    system, user = build_compare_messages(b, a, compare_plans(b, a), before_text, after_text, language)
+    (b, raw_b, _, _), (a, raw_a, _, _) = prepare(before_text), prepare(after_text)
+    system, user = build_compare_messages(b, a, compare_plans(b, a), raw_b, raw_a, language)
     try:
         return call_llm(_llm_request(provider, api_key, model, base_url, language), system, user)
     except LLMError as e:
@@ -126,13 +156,31 @@ def run_compare_ai(before_text, after_text, provider, api_key, model, base_url, 
 def export_report(plan_text: str, ai_md: str):
     if not plan_text or not plan_text.strip():
         raise gr.Error("보고서로 만들 실행계획이 없습니다.")
-    a = analyze(plan_text)
-    html = build_html_report(a, plan_text, ai_advice=ai_md or "")
+    a, raw_plan, stats_md, _ = prepare(plan_text)
+    html = build_html_report(a, raw_plan, ai_advice=ai_md or "", db_stats_md=stats_md)
     tag = re.sub(r"\W+", "", a.plan.sql_id or a.plan.plan_hash_value or "plan")
     out_dir = Path(tempfile.mkdtemp(prefix="xplanlens_"))
     path = out_dir / f"xplanlens_report_{tag}.html"
     path.write_text(html, encoding="utf-8")
     return str(path)
+
+
+def make_script(sql_id: str, child: str, include_binds: bool):
+    child = (child or "").strip()
+    if child and not child.isdigit():
+        raise gr.Error("child 번호는 0 이상의 정수입니다. 비워 두면 모든 자식 커서를 수집합니다.")
+    try:
+        return build_collect_script(sql_id, int(child) if child else None, include_binds)
+    except ValueError as e:
+        raise gr.Error(str(e))
+
+
+def send_collected(text: str):
+    if not (text or "").strip():
+        raise gr.Error("수집 스크립트의 실행 결과를 붙여넣어 주세요.")
+    if not is_collected(text):
+        raise gr.Error("'@@PLAN|' 으로 시작하는 행을 찾지 못했습니다. 스크립트 출력 전체(또는 그리드 전체 행)를 복사해 붙여넣어 주세요.")
+    return text, gr.Tabs(selected="analyze")
 
 
 def on_provider_change(provider: str):
@@ -151,7 +199,7 @@ def on_provider_change(provider: str):
 CSS = """
 .gradio-container{max-width:1400px !important}
 #plan-input textarea{font-family:ui-monospace,Consolas,'D2Coding',monospace !important;font-size:12px !important;white-space:pre !important}
-#cmp-before textarea,#cmp-after textarea{font-family:ui-monospace,Consolas,monospace !important;font-size:12px !important;white-space:pre !important}
+#cmp-before textarea,#cmp-after textarea,#collected-input textarea{font-family:ui-monospace,Consolas,monospace !important;font-size:12px !important;white-space:pre !important}
 """
 
 FILE_TYPES = [".txt", ".sql", ".log", ".lst", ".html", ".htm"]
@@ -177,9 +225,9 @@ with gr.Blocks(title="XPlanLens - Oracle 11g 실행계획 분석기", css=CSS, t
             base_url = gr.Textbox(label="Base URL (OpenAI 호환 공급자)", placeholder="https://openrouter.ai/api/v1", visible=False)
         provider.change(on_provider_change, provider, [model, base_url])
 
-    with gr.Tabs():
+    with gr.Tabs() as main_tabs:
         # ----------------------------------------------------------- 분석 탭
-        with gr.Tab("📊 실행계획 분석"):
+        with gr.Tab("📊 실행계획 분석", id="analyze"):
             with gr.Row():
                 with gr.Column(scale=5):
                     plan_input = gr.Textbox(
@@ -209,6 +257,8 @@ with gr.Blocks(title="XPlanLens - Oracle 11g 실행계획 분석기", css=CSS, t
                     table_out = gr.HTML()
                 with gr.Tab("AI 개선안"):
                     ai_out = gr.Markdown("API Key 를 입력하고 'AI 개선안 받기'를 누르세요.")
+                with gr.Tab("DB 통계"):
+                    stats_out = gr.Markdown(NO_DB_STATS)
                 with gr.Tab("JSON"):
                     json_out = gr.JSON()
 
@@ -217,12 +267,12 @@ with gr.Blocks(title="XPlanLens - Oracle 11g 실행계획 분석기", css=CSS, t
                 report_file = gr.File(label="보고서 다운로드", interactive=False)
 
             sample_dd.change(load_sample, sample_dd, plan_input).then(
-                run_analysis, plan_input, [summary_out, tree_out, table_out, json_out, ai_out]
+                run_analysis, plan_input, [summary_out, tree_out, table_out, json_out, ai_out, stats_out]
             )
             upload.upload(load_file, upload, plan_input).then(
-                run_analysis, plan_input, [summary_out, tree_out, table_out, json_out, ai_out]
+                run_analysis, plan_input, [summary_out, tree_out, table_out, json_out, ai_out, stats_out]
             )
-            analyze_btn.click(run_analysis, plan_input, [summary_out, tree_out, table_out, json_out, ai_out])
+            analyze_btn.click(run_analysis, plan_input, [summary_out, tree_out, table_out, json_out, ai_out, stats_out])
             ai_btn.click(
                 run_ai,
                 [plan_input, sql_input, extra_input, provider, api_key, model, base_url, language],
@@ -230,6 +280,31 @@ with gr.Blocks(title="XPlanLens - Oracle 11g 실행계획 분석기", css=CSS, t
                 api_name=False,
             )
             report_btn.click(export_report, [plan_input, ai_out], report_file)
+
+        # ----------------------------------------------------------- SQL_ID 탭
+        with gr.Tab("🆔 SQL_ID 로 분석", id="sqlid"):
+            gr.Markdown(SQLID_HELP)
+            with gr.Row():
+                sqlid_input = gr.Textbox(label="SQL_ID", placeholder="예) 8fk2zq1m3x7cd", max_lines=1, scale=3)
+                child_input = gr.Textbox(label="child 번호 (선택)", placeholder="비우면 전체", max_lines=1, scale=1)
+                binds_chk = gr.Checkbox(value=True, label="바인드 캡처 값 포함", scale=1)
+                script_btn = gr.Button("① 수집 스크립트 만들기", variant="primary", scale=1)
+            script_out = gr.Code(label="수집 스크립트 (오른쪽 위 버튼으로 복사)", language="sql", interactive=False)
+            with gr.Row():
+                with gr.Column(scale=5):
+                    collected_input = gr.Textbox(
+                        label="② 실행 결과 붙여넣기", lines=12, max_lines=30, elem_id="collected-input",
+                        placeholder="@@META|… @@PLAN|… 로 시작하는 출력 전체를 붙여넣으세요.",
+                    )
+                with gr.Column(scale=2):
+                    collected_file = gr.File(label="또는 스풀 파일 업로드", file_types=FILE_TYPES, type="filepath")
+                    collected_btn = gr.Button("③ 분석하기", variant="primary")
+
+            script_btn.click(make_script, [sqlid_input, child_input, binds_chk], script_out)
+            collected_file.upload(load_file, collected_file, collected_input)
+            collected_btn.click(send_collected, collected_input, [plan_input, main_tabs]).then(
+                run_analysis, plan_input, [summary_out, tree_out, table_out, json_out, ai_out, stats_out]
+            )
 
         # ----------------------------------------------------------- 비교 탭
         with gr.Tab("⚖️ 튜닝 전/후 비교"):
